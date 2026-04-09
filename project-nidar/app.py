@@ -132,3 +132,4 @@ with col2:
             st.info("System Nominal. Awaiting incident detection...", icon="✅")
         else:
             st.warning("Protocol Blackout active. Network severed. Device is offline.", icon="⚠️")
+¸¸
