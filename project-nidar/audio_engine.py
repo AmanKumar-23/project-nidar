@@ -45,7 +45,7 @@ def trigger_deterrent(is_jammed: bool):
     if not pygame.mixer.get_init():
         initialize_audio()
         
-    filename = "blackbox.wav" if is_jammed else "deterrent.wav"
+    filename = "blackbox.wav" if is_jammed else "ghost_escort.mp3"
     
     if os.path.exists(filename):
         pygame.mixer.music.load(filename)

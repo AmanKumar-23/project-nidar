@@ -5,59 +5,99 @@ from datetime import datetime, timezone
 # Initialize S3 client leveraging the Lambda execution role
 s3_client = boto3.client('s3')
 
+def process_sos(payload, server_timestamp):
+    """Handles the legacy incoming SOS edge triggers."""
+    device_id = payload.get('device_id', 'unknown_device')
+    latitude = payload.get('latitude')
+    longitude = payload.get('longitude')
+    jammer_status = payload.get('jammer_status', False)
+    threat_type = payload.get('threat_type', 'unspecified')
+    
+    secure_log = {
+        "event_type": "sos_trigger",
+        "device_id": device_id,
+        "latitude": latitude,
+        "longitude": longitude,
+        "jammer_status": jammer_status,
+        "threat_type": threat_type,
+        "server_timestamp": server_timestamp
+    }
+    
+    object_key = f"logs/{device_id}/{server_timestamp.replace(':', '-')}.json"
+    s3_put_kwargs = {
+        'Bucket': 'nidar-secure-logs',
+        'Key': object_key,
+        'Body': json.dumps(secure_log),
+        'ContentType': 'application/json'
+    }
+    
+    if jammer_status:
+        s3_put_kwargs['Tagging'] = "priority=PROTOCOL_BLACKOUT"
+        
+    s3_client.put_object(**s3_put_kwargs)
+    
+    return {
+        "message": "SOS alert securely archived.",
+        "status": "success"
+    }
+
+def verify_reward(payload, server_timestamp):
+    """
+    Mock Database logic for linking successful responder interventions
+    to the Nirbhaya Fund social safety pool.
+    """
+    responder_id = payload.get('responder_id', 'unknown_responder')
+    lat = payload.get('latitude', 0.0)
+    lon = payload.get('longitude', 0.0)
+    
+    reward_entry = {
+        "event_type": "reward_verification",
+        "responder_id": responder_id,
+        "intervention_lat": lat,
+        "intervention_lon": lon,
+        "funds_source": "Nirbhaya_Fund_Safety_Pool",
+        "credits_allocated": 500,
+        "flag_eshram_priority": True,
+        "flag_pmjay_enrollment": True,
+        "server_timestamp": server_timestamp
+    }
+    
+    # Save validation transaction to the secure logging bucket
+    object_key = f"interventions/{responder_id}/{server_timestamp.replace(':', '-')}.json"
+    
+    s3_client.put_object(
+        Bucket='nidar-secure-logs',
+        Key=object_key,
+        Body=json.dumps(reward_entry),
+        ContentType='application/json',
+        Tagging="intervention=verified"
+    )
+    
+    return {
+        "message": "Verification active. 500 Credits Transferred.",
+        "status": "success",
+        "responder_id": responder_id
+    }
+
 def lambda_handler(event, context):
     """
-    AWS Lambda endpoint for Project Nidar edge devices to submit SOS alerts.
+    AWS Lambda endpoint for Project Nidar APIs. Routes based on path.
     """
     try:
-        # Assuming API Gateway Proxy integration, the event payload is in 'body'
         body = event.get('body', event)
         if isinstance(body, str):
             payload = json.loads(body)
         else:
             payload = body
             
-        # Parse the required fields from the incoming payload
-        device_id = payload.get('device_id', 'unknown_device')
-        latitude = payload.get('latitude')
-        longitude = payload.get('longitude')
-        jammer_status = payload.get('jammer_status', False)
-        threat_type = payload.get('threat_type', 'unspecified')
-        
-        # Append a secure server-side UTC timestamp to avoid device-time spoofing
+        path = event.get('path', '/sos')
         server_timestamp = datetime.now(timezone.utc).isoformat()
         
-        # Formulate the document layout
-        secure_log = {
-            "device_id": device_id,
-            "latitude": latitude,
-            "longitude": longitude,
-            "jammer_status": jammer_status,
-            "threat_type": threat_type,
-            "server_timestamp": server_timestamp
-        }
-        
-        # Define S3 destination parameters
-        bucket_name = "nidar-secure-logs"
-        # Create a URL-safe key replacing colons
-        object_key = f"logs/{device_id}/{server_timestamp.replace(':', '-')}.json"
-        
-        s3_put_kwargs = {
-            'Bucket': bucket_name,
-            'Key': object_key,
-            'Body': json.dumps(secure_log),
-            'ContentType': 'application/json'
-        }
-        
-        # Edge Case Logic: Protocol Blackout metadata tagging
-        if jammer_status is True:
-            # Apply an S3 Object Meta Tag for high-priority lifecycles
-            s3_put_kwargs['Tagging'] = "priority=PROTOCOL_BLACKOUT"
+        if path == '/verify-reward':
+            response_data = verify_reward(payload, server_timestamp)
+        else:
+            response_data = process_sos(payload, server_timestamp)
             
-        # Execute the save to the database/bucket
-        s3_client.put_object(**s3_put_kwargs)
-        
-        # Success response configured with universal CORS headers
         return {
             'statusCode': 200,
             'headers': {
@@ -66,17 +106,11 @@ def lambda_handler(event, context):
                 'Access-Control-Allow-Methods': 'OPTIONS, POST',
                 'Access-Control-Allow-Headers': 'Content-Type'
             },
-            'body': json.dumps({
-                "message": "SOS alert securely archived.",
-                "status": "success"
-            })
+            'body': json.dumps(response_data)
         }
         
     except Exception as e:
-        # Log the internal failure trace for AWS CloudWatch
         print(f"Error handling edge payload: {str(e)}")
-        
-        # Fallback HTTP 500 response
         return {
             'statusCode': 500,
             'headers': {
